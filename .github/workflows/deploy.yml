@@ -30,7 +30,7 @@ jobs:
 
       # Compile llama.go → llama.wasm
       - name: Build WASM
-        run: GOOS=js GOARCH=wasm go build -o llm.wasm llama.go
+        run: GOOS=js GOARCH=wasm go build -o llama.wasm llama.go
 
       # Copy the JS glue shim from the Go installation
       - name: Copy wasm_exec.js
