@@ -826,10 +826,10 @@ func buildTokenizer(g *ggufFile) (*BPETokenizer, error) {
 	bosID := int(g.kvU32("tokenizer.ggml.bos_token_id", 1))
 	eosID := int(g.kvU32("tokenizer.ggml.eos_token_id", 2))
 
-	// Collect special/control tokens (token_type == 3) that must be encoded
-	// atomically — e.g. <|im_start|>, <|im_end|>, <eos>, <bos>.
-	// We sort them longest-first so longer matches take priority.
-	var specialTokens []string
+	// Collect special/control tokens that must be encoded atomically.
+	// Strategy: token_type==3 (control) AND any <|...|>-shaped token.
+	// We run both passes so neither is a silent fallback for the other.
+	specialSet := make(map[string]bool)
 	if ttArr := g.kvArr("tokenizer.ggml.token_type"); ttArr != nil {
 		for i, v := range ttArr {
 			var tt int32
@@ -837,17 +837,20 @@ func buildTokenizer(g *ggufFile) (*BPETokenizer, error) {
 			case int32:  tt = x
 			case uint32: tt = int32(x)
 			}
-			if tt == 3 && i < len(dec) { // 3 = control token
-				specialTokens = append(specialTokens, dec[i])
+			if tt == 3 && i < len(dec) {
+				specialSet[dec[i]] = true
 			}
 		}
-	} else {
-		// Fallback: any token matching <|...|> is likely a special token
-		for _, s := range dec {
-			if len(s) > 4 && s[0] == '<' && s[1] == '|' && s[len(s)-1] == '>' && s[len(s)-2] == '|' {
-				specialTokens = append(specialTokens, s)
-			}
+	}
+	// Always also include <|...|>-shaped tokens (ChatML markers for SmolLM2).
+	for _, s := range dec {
+		if len(s) > 4 && s[0] == '<' && s[1] == '|' && s[len(s)-1] == '>' && s[len(s)-2] == '|' {
+			specialSet[s] = true
 		}
+	}
+	var specialTokens []string
+	for s := range specialSet {
+		specialTokens = append(specialTokens, s)
 	}
 	// Sort longest first so e.g. <|im_start|> is matched before <|im
 	for i := 0; i < len(specialTokens); i++ {
@@ -933,16 +936,48 @@ func (t *BPETokenizer) encode(text string) []int {
 }
 
 // decode converts token IDs back to a UTF-8 string.
+// Normal BPE tokens use the byte-decoder. Special tokens (e.g. <|im_end|>)
+// are emitted as their raw UTF-8 strings since they're already valid text.
 func (t *BPETokenizer) decode(ids []int) string {
 	var sb strings.Builder
 	for _, id := range ids {
 		if id < 0 || id >= len(t.dec) {
 			continue
 		}
-		for _, ch := range t.dec[id] {
+		piece := t.dec[id]
+		// Try byte-level decode first (normal BPE tokens)
+		var buf []byte
+		allMapped := true
+		for _, ch := range piece {
 			if b, ok := t.byteDec[ch]; ok {
-				sb.WriteByte(b)
+				buf = append(buf, b)
+			} else {
+				allMapped = false
+				break
 			}
+		}
+		if allMapped {
+			sb.Write(buf)
+		} else {
+			// Special token: write as-is (already valid UTF-8)
+			sb.WriteString(piece)
+		}
+	}
+	return sb.String()
+}
+
+// tokenizeDebug returns a human-readable description of how text is tokenized.
+func (t *BPETokenizer) tokenizeDebug(text string) string {
+	ids := t.encode(text)
+	var sb strings.Builder
+	for i, id := range ids {
+		if i > 0 {
+			sb.WriteString("|")
+		}
+		if id >= 0 && id < len(t.dec) {
+			sb.WriteString(fmt.Sprintf("[%d:%s]", id, t.dec[id]))
+		} else {
+			sb.WriteString(fmt.Sprintf("[%d:?]", id))
 		}
 	}
 	return sb.String()
@@ -1180,11 +1215,18 @@ func jsGenerate(_ js.Value, args []js.Value) any {
 
 func jsReady(_ js.Value, _ []js.Value) any { return isReady }
 
+func jsTokenize(_ js.Value, args []js.Value) any {
+	if !isReady { return "not ready" }
+	if len(args) < 1 { return "" }
+	return tok.tokenizeDebug(args[0].String())
+}
+
 func main() {
 	js.Global().Set("llm", js.ValueOf(map[string]any{
 		"load":     js.FuncOf(jsLoad),
 		"generate": js.FuncOf(jsGenerate),
 		"ready":    js.FuncOf(jsReady),
+		"tokenize": js.FuncOf(jsTokenize),
 	}))
 	js.Global().Get("document").Call("dispatchEvent",
 		js.Global().Get("CustomEvent").New("wasmReady"),
