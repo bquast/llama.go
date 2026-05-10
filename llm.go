@@ -748,14 +748,15 @@ func forwardOne(tokenID int) []float32 {
 // ══════════════════════════════════════════════════════════════════════════════
 
 type BPETokenizer struct {
-	enc     map[string]int
-	dec     []string
-	merges  map[[2]string]int
-	byteEnc [256]rune
-	byteDec map[rune]byte
-	bosID   int
-	eosID   int
-	pat     *regexp.Regexp
+	enc           map[string]int
+	dec           []string
+	merges        map[[2]string]int
+	byteEnc       [256]rune
+	byteDec       map[rune]byte
+	bosID         int
+	eosID         int
+	pat           *regexp.Regexp
+	specialTokens []string // matched literally, bypassing BPE splitting
 }
 
 // buildByteCodec creates GPT-2's byte↔unicode mapping.
@@ -825,44 +826,106 @@ func buildTokenizer(g *ggufFile) (*BPETokenizer, error) {
 	bosID := int(g.kvU32("tokenizer.ggml.bos_token_id", 1))
 	eosID := int(g.kvU32("tokenizer.ggml.eos_token_id", 2))
 
+	// Collect special/control tokens (token_type == 3) that must be encoded
+	// atomically — e.g. <|im_start|>, <|im_end|>, <eos>, <bos>.
+	// We sort them longest-first so longer matches take priority.
+	var specialTokens []string
+	if ttArr := g.kvArr("tokenizer.ggml.token_type"); ttArr != nil {
+		for i, v := range ttArr {
+			var tt int32
+			switch x := v.(type) {
+			case int32:  tt = x
+			case uint32: tt = int32(x)
+			}
+			if tt == 3 && i < len(dec) { // 3 = control token
+				specialTokens = append(specialTokens, dec[i])
+			}
+		}
+	} else {
+		// Fallback: any token matching <|...|> is likely a special token
+		for _, s := range dec {
+			if len(s) > 4 && s[0] == '<' && s[1] == '|' && s[len(s)-1] == '>' && s[len(s)-2] == '|' {
+				specialTokens = append(specialTokens, s)
+			}
+		}
+	}
+	// Sort longest first so e.g. <|im_start|> is matched before <|im
+	for i := 0; i < len(specialTokens); i++ {
+		for j := i + 1; j < len(specialTokens); j++ {
+			if len(specialTokens[j]) > len(specialTokens[i]) {
+				specialTokens[i], specialTokens[j] = specialTokens[j], specialTokens[i]
+			}
+		}
+	}
+
 	return &BPETokenizer{
 		enc: enc, dec: dec, merges: merges,
 		byteEnc: byteEnc, byteDec: byteDec,
 		bosID: bosID, eosID: eosID,
+		specialTokens: specialTokens,
 		pat: regexp.MustCompile(`'s|'t|'re|'ve|'m|'ll|'d| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+`),
 	}, nil
 }
 
 // encode converts text to token IDs using byte-level BPE.
+// Special/control tokens (e.g. <|im_start|>) are matched atomically first,
+// before the BPE regex splits the text into words.
 func (t *BPETokenizer) encode(text string) []int {
 	var ids []int
-	for _, word := range t.pat.FindAllString(text, -1) {
-		// Map each byte to its unicode representative
-		chars := make([]string, len(word))
-		for i, b := range []byte(word) {
-			chars[i] = string(t.byteEnc[b])
-		}
-		// Greedy BPE: apply the lowest-rank merge until no merges remain
-		for len(chars) > 1 {
-			bestRank, bestI := math.MaxInt32, -1
-			for i := 0; i < len(chars)-1; i++ {
-				if r, ok := t.merges[[2]string{chars[i], chars[i+1]}]; ok && r < bestRank {
-					bestRank, bestI = r, i
+	// Split text into segments: special tokens and plain text chunks.
+	remaining := text
+	for remaining != "" {
+		// Check for a special token at the current position.
+		matched := false
+		for _, st := range t.specialTokens {
+			if strings.HasPrefix(remaining, st) {
+				if id, ok := t.enc[st]; ok {
+					ids = append(ids, id)
+					remaining = remaining[len(st):]
+					matched = true
+					break
 				}
 			}
-			if bestI < 0 {
-				break
-			}
-			merged := chars[bestI] + chars[bestI+1]
-			tmp := make([]string, 0, len(chars)-1)
-			tmp = append(tmp, chars[:bestI]...)
-			tmp = append(tmp, merged)
-			tmp = append(tmp, chars[bestI+2:]...)
-			chars = tmp
 		}
-		for _, piece := range chars {
-			if id, ok := t.enc[piece]; ok {
-				ids = append(ids, id)
+		if matched {
+			continue
+		}
+		// Find the next special token occurrence.
+		nextAt := len(remaining)
+		for _, st := range t.specialTokens {
+			if idx := strings.Index(remaining, st); idx >= 0 && idx < nextAt {
+				nextAt = idx
+			}
+		}
+		// BPE-encode the plain chunk up to (but not including) the next special token.
+		chunk := remaining[:nextAt]
+		remaining = remaining[nextAt:]
+		for _, word := range t.pat.FindAllString(chunk, -1) {
+			chars := make([]string, len(word))
+			for i, b := range []byte(word) {
+				chars[i] = string(t.byteEnc[b])
+			}
+			for len(chars) > 1 {
+				bestRank, bestI := math.MaxInt32, -1
+				for i := 0; i < len(chars)-1; i++ {
+					if r, ok := t.merges[[2]string{chars[i], chars[i+1]}]; ok && r < bestRank {
+						bestRank, bestI = r, i
+					}
+				}
+				if bestI < 0 {
+					break
+				}
+				merged := chars[bestI] + chars[bestI+1]
+				tmp := make([]string, 0, len(chars)-1)
+				tmp = append(tmp, chars[:bestI]...)
+				tmp = append(tmp, merged)
+				tmp = append(tmp, chars[bestI+2:]...)
+				chars = tmp
+			}
+			for _, piece := range chars {
+				if id, ok := t.enc[piece]; ok {
+					ids = append(ids, id)
+				}
 			}
 		}
 	}
