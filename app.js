@@ -8,31 +8,31 @@
 const MODEL_URL =
   "https://huggingface.co/bartowski/SmolLM2-135M-Instruct-GGUF/resolve/main/" +
   "SmolLM2-135M-Instruct-Q8_0.gguf";
-const CACHE_NAME  = "llm-go-v2-q8";
-const MAX_TOKENS  = 200;
+const CACHE_NAME = "llm-go-v2-q8";
+const MAX_TOKENS = 200;
 const TEMPERATURE = 0.7;
 
 // ── DOM refs ──────────────────────────────────────────────────────────────────
-const log      = document.getElementById("log");
-const input    = document.getElementById("input");
-const sendBtn  = document.getElementById("send");
+const log = document.getElementById("log");
+const input = document.getElementById("input");
+const sendBtn = document.getElementById("send");
 
 function appendMsg(role, text) {
-  const div   = document.createElement("div");
+  const div = document.createElement("div");
   div.className = "msg " + role;
-  
+
   if (role !== "system") {
     const label = document.createElement("span");
-    label.className   = "label";
+    label.className = "label";
     label.textContent = role === "user" ? "you" : "llama.go";
     div.appendChild(label);
   }
-  
-  const body  = document.createElement("span");
-  body.className   = "body";
+
+  const body = document.createElement("span");
+  body.className = "body";
   body.textContent = text;
   div.appendChild(body);
-  
+
   log.appendChild(div);
   log.scrollTop = log.scrollHeight;
   return body;
@@ -49,7 +49,7 @@ async function bootWasm() {
     document.addEventListener("wasmReady", resolve, { once: true })
   );
 
-  const result = await WebAssembly.instantiateStreaming(fetch("llm.wasm"), go.importObject);
+  const result = await WebAssembly.instantiateStreaming(fetch("llama.wasm"), go.importObject);
   go.run(result.instance);
   await wasmReady;
   msgBody.innerHTML = 'loading runtime… <span class="done">✅</span>';
@@ -57,7 +57,7 @@ async function bootWasm() {
 
 // ── Model fetch + cache ───────────────────────────────────────────────────────
 async function fetchModel() {
-  const cache  = await caches.open(CACHE_NAME);
+  const cache = await caches.open(CACHE_NAME);
   const cached = await cache.match(MODEL_URL);
   if (cached) {
     const msgBody = appendMsg("system", "loading model from cache… ");
@@ -70,7 +70,7 @@ async function fetchModel() {
   const resp = await fetch(MODEL_URL);
   if (!resp.ok) throw new Error("fetch failed: " + resp.status);
 
-  const total  = parseInt(resp.headers.get("content-length") || "0");
+  const total = parseInt(resp.headers.get("content-length") || "0");
   const reader = resp.body.getReader();
   const chunks = [];
   let received = 0;
@@ -110,7 +110,7 @@ async function init() {
     if (err) throw new Error("llm.load: " + err);
     msgBody.innerHTML = 'parsing model… <span class="done">✅</span>';
 
-    input.disabled   = false;
+    input.disabled = false;
     sendBtn.disabled = false;
     input.focus();
     appendMsg("system", "Model is ready! Send a message to start chatting.");
@@ -125,8 +125,8 @@ async function send() {
   const text = input.value.trim();
   if (!text || !llm.ready()) return;
 
-  input.value      = "";
-  input.disabled   = true;
+  input.value = "";
+  input.disabled = true;
   sendBtn.disabled = true;
 
   appendMsg("user", text);
@@ -146,7 +146,7 @@ async function send() {
     replyEl.textContent = "error: " + e.message;
   }
 
-  input.disabled   = false;
+  input.disabled = false;
   sendBtn.disabled = false;
   input.focus();
 }
