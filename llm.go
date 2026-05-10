@@ -1112,6 +1112,26 @@ func loadModel(raw []byte) error {
 		return fmt.Errorf("GGUF: %w", err)
 	}
 
+	// Diagnose: log key offsets and raw bytes at tensor data start
+	{
+		console := js.Global().Get("console")
+		console.Call("log", fmt.Sprintf("[diag] rawLen=%d dataOff=%d", len(raw), g.dataOff))
+		if t, ok := g.tensors["token_embd.weight"]; ok {
+			start := g.dataOff + int(t.offset)
+			console.Call("log", fmt.Sprintf("[diag] tokenEmbd: type=%d offset=%d shape=%v start=%d",
+				t.typ, t.offset, t.shape, start))
+			if start+8 <= len(raw) {
+				console.Call("log", fmt.Sprintf("[diag] first8bytes@start: %v", raw[start:start+8]))
+			} else {
+				console.Call("log", fmt.Sprintf("[diag] ERROR: start=%d > rawLen=%d", start, len(raw)))
+			}
+		}
+		// Also check bytes right at dataOff
+		if g.dataOff+8 <= len(raw) {
+			console.Call("log", fmt.Sprintf("[diag] first8bytes@dataOff: %v", raw[g.dataOff:g.dataOff+8]))
+		}
+	}
+
 	cfg = Config{
 		nVocab:    int(g.kvU32("llama.vocab_size", 49152)),
 		nCtx:      int(g.kvU32("llama.context_length", 2048)),
