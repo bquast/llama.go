@@ -735,7 +735,40 @@ func forwardOne(tokenID int) []float32 {
 		addIP(x, matVec(&lw.ffnDown, gate))
 	}
 
-	logits := matVec(&lmHead, rmsNorm(x, outputNorm, cfg.rmsEps))
+	xFinal := rmsNorm(x, outputNorm, cfg.rmsEps)
+	logits := matVec(&lmHead, xFinal)
+
+	// Deep debug on last prompt token (pos=9) and first generated token
+	if pos == 9 || pos == 10 {
+		console := js.Global().Get("console")
+		// Hidden state norm
+		var xNorm float64
+		for _, v := range xFinal { xNorm += float64(v) * float64(v) }
+		// Top-5 logits
+		type iv struct{ i int; v float32 }
+		top5 := [5]iv{{-1,-1e38},{-1,-1e38},{-1,-1e38},{-1,-1e38},{-1,-1e38}}
+		for i, v := range logits {
+			if v > top5[4].v {
+				top5[4] = iv{i, v}
+				for j := 3; j >= 0 && top5[j+1].v > top5[j].v; j-- {
+					top5[j], top5[j+1] = top5[j+1], top5[j]
+				}
+			}
+		}
+		console.Call("log", fmt.Sprintf("[debug pos=%d] hiddenNorm=%.3f top5: %d(%.2f) %d(%.2f) %d(%.2f) %d(%.2f) %d(%.2f)",
+			pos, math.Sqrt(xNorm),
+			top5[0].i, top5[0].v, top5[1].i, top5[1].v,
+			top5[2].i, top5[2].v, top5[3].i, top5[3].v,
+			top5[4].i, top5[4].v))
+		// Also log embedding norm for first few tokens  
+		if pos == 9 {
+			emb1 := embedRow(&tokenEmbd, 1) // <|im_start|>
+			var aNorm float64
+			for _, v := range emb1 { aNorm += float64(v)*float64(v) }
+			console.Call("log", fmt.Sprintf("[debug] emb[1] norm=%.3f", math.Sqrt(aNorm)))
+		}
+	}
+
 	kvPos++
 	return logits
 }
