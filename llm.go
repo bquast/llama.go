@@ -596,6 +596,15 @@ func embedRow(w *Weight, idx int) []float32 {
 				out[base+i] = float32(d * float64(int8(sc[i>>4])) * float64(q))
 			}
 		}
+	case typeQ8_0:
+		for bi := 0; bi*QK8 < len(out); bi++ {
+			b := row[bi*szQ8:]
+			d := float64(fp16ToF32(binary.LittleEndian.Uint16(b[0:])))
+			base := bi * QK8
+			for i := 0; i < QK8; i++ {
+				out[base+i] = float32(d * float64(int8(b[2+i])))
+			}
+		}
 	}
 	return out
 }
