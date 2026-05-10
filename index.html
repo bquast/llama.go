@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>llm.go</title>
+  <link rel="stylesheet" href="style.css" />
+  <!-- wasm_exec.js is copied from GOROOT by the CI build step -->
+  <script src="wasm_exec.js"></script>
+</head>
+<body>
+  <header>
+    <h1>llm<span class="dot">.</span>go</h1>
+    <p class="tagline">
+      SmolLM2-135M-Instruct · Q4_K_M · pure Go → WASM · no ML libraries
+    </p>
+    <p class="sub">
+      Inspired by
+      <a href="https://github.com/karpathy/llm.c" target="_blank">llm.c</a>
+      and
+      <a href="https://github.com/ggerganov/llama.cpp" target="_blank">llama.cpp</a>.
+      Source: <a href="https://github.com/bquast/llm.go" target="_blank">bquast/llm.go</a>
+    </p>
+  </header>
+
+  <div id="status">initialising…</div>
+
+  <main>
+    <div id="log"></div>
+    <div id="composer">
+      <textarea
+        id="input"
+        rows="2"
+        placeholder="ask something…"
+        disabled
+      ></textarea>
+      <button id="send" disabled>send</button>
+    </div>
+  </main>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
