@@ -22,6 +22,7 @@ import (
 	"regexp"
 	"strings"
 	"syscall/js"
+	"time"
 )
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -1227,7 +1228,6 @@ func jsGenerate(_ js.Value, args []js.Value) any {
 		return "busy"
 	}
 	busy = true
-	defer func() { busy = false }()
 
 	prompt := "Hello"
 	maxNew := 80
@@ -1242,47 +1242,76 @@ func jsGenerate(_ js.Value, args []js.Value) any {
 		temp = float32(args[2].Float())
 	}
 
-	// Format as ChatML for SmolLM2-Instruct (includes the default system message it was trained on)
-	full := "<|im_start|>system\nYou are a helpful AI assistant named SmolLM, trained by Hugging Face<|im_end|>\n<|im_start|>user\n" + prompt + "<|im_end|>\n<|im_start|>assistant\n"
-
-	kvPos = 0
-	ids := tok.encode(full)
-	if len(ids) == 0 {
-		ids = []int{tok.bosID}
+	var callback js.Value
+	if len(args) > 3 && args[3].Type() == js.TypeFunction {
+		callback = args[3]
 	}
 
-	// Debug: log prompt tokens and key config to console
-	console := js.Global().Get("console")
-	dbg := fmt.Sprintf("bosID=%d eosID=%d nSpecial=%d promptLen=%d",
-		tok.bosID, tok.eosID, len(tok.specialTokens), len(ids))
-	if len(ids) > 0 {
-		first := fmt.Sprintf(" first3IDs=%v", ids[:min3(len(ids), 3)])
-		dbg += first
-	}
-	console.Call("log", "[llm.go]", dbg)
-	console.Call("log", "[llm.go] prompt tokenized:", tok.tokenizeDebug(full[:min3(len(full), 60)]))
+	promiseConstructor := js.Global().Get("Promise")
+	return promiseConstructor.New(js.FuncOf(func(_ js.Value, resolveReject []js.Value) any {
+		resolve := resolveReject[0]
+		reject := resolveReject[1]
 
-	// Prefill the prompt
-	var logits []float32
-	for _, id := range ids {
-		if kvPos >= maxCtx {
-			break
-		}
-		logits = forwardOne(id)
-	}
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					reject.Invoke(fmt.Sprintf("%v", r))
+				}
+				busy = false
+			}()
 
-	// Autoregressive decode
-	var out []int
-	for i := 0; i < maxNew && kvPos < maxCtx; i++ {
-		next := sampleTopK(logits, temp, 40)
-		console.Call("log", fmt.Sprintf("[llm.go] token %d: id=%d str=%q", i, next, safeToken(tok, next)))
-		if next == tok.eosID {
-			break
-		}
-		out = append(out, next)
-		logits = forwardOne(next)
-	}
-	return tok.decode(out)
+			// Format as ChatML for SmolLM2-Instruct (includes the default system message it was trained on)
+			full := "<|im_start|>system\nYou are a helpful AI assistant named SmolLM, trained by Hugging Face<|im_end|>\n<|im_start|>user\n" + prompt + "<|im_end|>\n<|im_start|>assistant\n"
+
+			kvPos = 0
+			ids := tok.encode(full)
+			if len(ids) == 0 {
+				ids = []int{tok.bosID}
+			}
+
+			// Debug: log prompt tokens and key config to console
+			console := js.Global().Get("console")
+			dbg := fmt.Sprintf("bosID=%d eosID=%d nSpecial=%d promptLen=%d",
+				tok.bosID, tok.eosID, len(tok.specialTokens), len(ids))
+			if len(ids) > 0 {
+				first := fmt.Sprintf(" first3IDs=%v", ids[:min3(len(ids), 3)])
+				dbg += first
+			}
+			console.Call("log", "[llm.go]", dbg)
+			console.Call("log", "[llm.go] prompt tokenized:", tok.tokenizeDebug(full[:min3(len(full), 60)]))
+
+			// Prefill the prompt
+			var logits []float32
+			for _, id := range ids {
+				if kvPos >= maxCtx {
+					break
+				}
+				logits = forwardOne(id)
+			}
+
+			// Autoregressive decode
+			var out []int
+			for i := 0; i < maxNew && kvPos < maxCtx; i++ {
+				next := sampleTopK(logits, temp, 40)
+				console.Call("log", fmt.Sprintf("[llm.go] token %d: id=%d str=%q", i, next, safeToken(tok, next)))
+				if next == tok.eosID {
+					break
+				}
+				out = append(out, next)
+				
+				if callback.Type() == js.TypeFunction {
+					callback.Invoke(tok.decode(out))
+				}
+
+				// Yield to JS event loop so the browser can repaint the DOM
+				time.Sleep(1 * time.Millisecond)
+
+				logits = forwardOne(next)
+			}
+			resolve.Invoke(tok.decode(out))
+		}()
+		return nil
+	}))
 }
 
 func min3(a, b int) int { if a < b { return a }; return b }

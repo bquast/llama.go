@@ -1,4 +1,4 @@
-// app.js — frontend for llm.go
+// app.js — frontend for llama.go
 //
 // 1. Fetches SmolLM2-135M-Instruct-Q4_K_M.gguf from HuggingFace (~105 MB)
 //    and caches it in the browser Cache API so subsequent loads are instant.
@@ -16,20 +16,23 @@ const TEMPERATURE = 0.7;
 const log      = document.getElementById("log");
 const input    = document.getElementById("input");
 const sendBtn  = document.getElementById("send");
-const status   = document.getElementById("status");
-
-function setStatus(msg) { status.textContent = msg; }
 
 function appendMsg(role, text) {
   const div   = document.createElement("div");
   div.className = "msg " + role;
-  const label = document.createElement("span");
-  label.className   = "label";
-  label.textContent = role === "user" ? "you" : "llm.go";
+  
+  if (role !== "system") {
+    const label = document.createElement("span");
+    label.className   = "label";
+    label.textContent = role === "user" ? "you" : "llama.go";
+    div.appendChild(label);
+  }
+  
   const body  = document.createElement("span");
   body.className   = "body";
   body.textContent = text;
-  div.append(label, body);
+  div.appendChild(body);
+  
   log.appendChild(div);
   log.scrollTop = log.scrollHeight;
   return body;
@@ -37,7 +40,7 @@ function appendMsg(role, text) {
 
 // ── WASM boot ─────────────────────────────────────────────────────────────────
 async function bootWasm() {
-  setStatus("loading runtime…");
+  const msgBody = appendMsg("system", "loading runtime… ");
   const go = new Go(); // from wasm_exec.js
 
   // Attach the wasmReady listener BEFORE go.run() to avoid the race condition
@@ -49,7 +52,7 @@ async function bootWasm() {
   const result = await WebAssembly.instantiateStreaming(fetch("llm.wasm"), go.importObject);
   go.run(result.instance);
   await wasmReady;
-  setStatus("runtime ready");
+  msgBody.innerHTML = 'loading runtime… <span class="done">✅</span>';
 }
 
 // ── Model fetch + cache ───────────────────────────────────────────────────────
@@ -57,13 +60,13 @@ async function fetchModel() {
   const cache  = await caches.open(CACHE_NAME);
   const cached = await cache.match(MODEL_URL);
   if (cached) {
-    setStatus("loading model from cache…");
+    const msgBody = appendMsg("system", "loading model from cache… ");
     const buf = await cached.arrayBuffer();
-    setStatus("model loaded from cache");
+    msgBody.innerHTML = 'loading model from cache… <span class="done">✅</span>';
     return buf;
   }
 
-  setStatus("downloading model (105 MB, cached after first load)…");
+  const msgBody = appendMsg("system", "downloading model… ");
   const resp = await fetch(MODEL_URL);
   if (!resp.ok) throw new Error("fetch failed: " + resp.status);
 
@@ -79,7 +82,7 @@ async function fetchModel() {
     received += value.length;
     if (total) {
       const pct = ((received / total) * 100).toFixed(0);
-      setStatus(`downloading… ${pct}%  (${(received / 1e6).toFixed(1)} / ${(total / 1e6).toFixed(0)} MB)`);
+      msgBody.innerHTML = `downloading model <span class="progress">[${pct}%]</span>`;
     }
   }
 
@@ -92,7 +95,7 @@ async function fetchModel() {
     headers: { "content-type": "application/octet-stream" }
   }));
 
-  setStatus("download complete");
+  msgBody.innerHTML = 'downloading model <span class="done">✅</span>';
   return all.buffer;
 }
 
@@ -102,16 +105,16 @@ async function init() {
     await bootWasm();
     const buf = await fetchModel();
 
-    setStatus("parsing model…");
+    const msgBody = appendMsg("system", "parsing model… ");
     const err = llm.load(buf);
     if (err) throw new Error("llm.load: " + err);
+    msgBody.innerHTML = 'parsing model… <span class="done">✅</span>';
 
-    setStatus("ready  ·  SmolLM2-135M-Instruct  ·  pure Go  ·  WASM");
     input.disabled   = false;
     sendBtn.disabled = false;
     input.focus();
   } catch (e) {
-    setStatus("error: " + e.message);
+    appendMsg("system", "error: " + e.message);
     console.error(e);
   }
 }
@@ -126,19 +129,16 @@ async function send() {
   sendBtn.disabled = true;
 
   appendMsg("user", text);
-  const replyEl = appendMsg("assistant", "…");
-  setStatus("generating…");
+  const replyEl = appendMsg("assistant", "🤔 thinking…");
 
-  // llm.generate is synchronous (blocks the main thread while running).
-  // We yield once so the browser can repaint the "…" placeholder.
-  await new Promise(r => setTimeout(r, 0));
   try {
-    const reply = llm.generate(text, MAX_TOKENS, TEMPERATURE);
-    replyEl.textContent = reply || "(empty response)";
-    setStatus("ready  ·  SmolLM2-135M-Instruct  ·  pure Go  ·  WASM");
+    const finalReply = await llm.generate(text, MAX_TOKENS, TEMPERATURE, (partialText) => {
+      replyEl.textContent = partialText;
+      log.scrollTop = log.scrollHeight;
+    });
+    replyEl.textContent = finalReply || "(empty response)";
   } catch (e) {
     replyEl.textContent = "error: " + e.message;
-    setStatus("error");
   }
 
   input.disabled   = false;

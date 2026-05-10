@@ -3,38 +3,39 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>llm.go</title>
+  <title>llama.go</title>
+  <link href="https://api.fontshare.com/v2/css?f[]=general-sans@400,500,600,700&display=swap" rel="stylesheet">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css" />
-  <!-- wasm_exec.js is copied from GOROOT by the CI build step -->
   <script src="wasm_exec.js"></script>
 </head>
 <body>
   <header>
-    <h1>llm<span class="dot">.</span>go</h1>
+    <h1>llama<span class="dot">.</span>go</h1>
     <p class="tagline">
-      SmolLM2-135M-Instruct · Q4_K_M · pure Go → WASM · no ML libraries
+      SmolLM2-135M-Instruct · Q8_0 · pure Go → WASM · no ML libraries
     </p>
     <p class="sub">
       Inspired by
-      <a href="https://github.com/karpathy/llm.c" target="_blank">llm.c</a>
+      <a href="https://github.com/karpathy/llama2.c" target="_blank">llama2.c</a>
       and
       <a href="https://github.com/ggerganov/llama.cpp" target="_blank">llama.cpp</a>.
-      Source: <a href="https://github.com/bquast/llm.go" target="_blank">bquast/llm.go</a>
+      Source: <a href="https://github.com/bquast/llama.go" target="_blank">bquast/llama.go</a>
     </p>
   </header>
-
-  <div id="status">initialising…</div>
 
   <main>
     <div id="log"></div>
     <div id="composer">
       <textarea
         id="input"
-        rows="2"
-        placeholder="ask something…"
+        rows="1"
+        placeholder="Ask something…"
         disabled
       ></textarea>
-      <button id="send" disabled>send</button>
+      <button id="send" disabled>Send</button>
     </div>
   </main>
 
