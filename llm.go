@@ -37,6 +37,8 @@ const ggufMagic = 0x46554747 // little-endian 'GGUF'
 const (
 	typeF32  uint32 = 0
 	typeF16  uint32 = 1
+	typeQ4_0 uint32 = 2  // legacy 4-bit, QK=32
+	typeQ5_0 uint32 = 6  // 5-bit, QK=32  ← used in Q4_K_M for some tensors
 	typeQ8_0 uint32 = 8
 	typeQ4K  uint32 = 12 // used by both Q4_K_S and Q4_K_M
 	typeQ6K  uint32 = 14
@@ -47,8 +49,10 @@ const (
 	QK_K  = 256 // elements per k-quant super-block
 	szQ4K = 144 // bytes: fp16 d(2) + fp16 dmin(2) + scales(12) + qs(128)
 	szQ6K = 210 // bytes: ql(128) + qh(64) + scales(16) + fp16 d(2)
-	QK8   = 32  // elements per Q8_0 block
+	QK8   = 32  // elements per Q8_0 / Q4_0 / Q5_0 block
 	szQ8  = 34  // bytes: fp16 d(2) + int8*32
+	szQ4_0 = 18 // bytes: fp16 d(2) + qs[16]  (32 × 4-bit nibbles)
+	szQ5_0 = 22 // bytes: fp16 d(2) + qh[4] + qs[16]  (32 × 5-bit)
 )
 
 // cur is a read-cursor over a byte slice.
@@ -229,6 +233,10 @@ func tensorByteSize(t *ggufTensor) int {
 		return n * 4
 	case typeF16:
 		return n * 2
+	case typeQ4_0:
+		return (n / QK8) * szQ4_0
+	case typeQ5_0:
+		return (n / QK8) * szQ5_0
 	case typeQ4K:
 		return (n / QK_K) * szQ4K
 	case typeQ6K:
@@ -270,6 +278,10 @@ func rowStride(typ uint32, cols int) int {
 		return cols * 4
 	case typeF16:
 		return cols * 2
+	case typeQ4_0:
+		return (cols / QK8) * szQ4_0
+	case typeQ5_0:
+		return (cols / QK8) * szQ5_0
 	case typeQ4K:
 		return (cols / QK_K) * szQ4K
 	case typeQ6K:
@@ -440,6 +452,44 @@ func dotF16(row []byte, x []float32) float32 {
 	return float32(acc)
 }
 
+// dotQ4_0: QK=32, block = fp16 d(2) + qs[16] (4-bit nibbles, subtract 8)
+func dotQ4_0(row []byte, x []float32) float32 {
+	var acc float64
+	for bi := 0; bi*QK8 < len(x); bi++ {
+		b := row[bi*szQ4_0:]
+		d := float64(fp16ToF32(binary.LittleEndian.Uint16(b[0:])))
+		qs := b[2:]
+		base := bi * QK8
+		for i := 0; i < 16; i++ {
+			acc += d * (float64(qs[i]&0xF) - 8) * float64(x[base+i])
+			acc += d * (float64(qs[i]>>4) - 8) * float64(x[base+16+i])
+		}
+	}
+	return float32(acc)
+}
+
+// dotQ5_0: QK=32, block = fp16 d(2) + qh[4] + qs[16]
+// 5-bit value = lower 4 bits from qs nibble | upper 1 bit from qh, centred at 16.
+func dotQ5_0(row []byte, x []float32) float32 {
+	var acc float64
+	for bi := 0; bi*QK8 < len(x); bi++ {
+		b := row[bi*szQ5_0:]
+		d  := float64(fp16ToF32(binary.LittleEndian.Uint16(b[0:])))
+		qh := b[2:6]
+		qs := b[6:]
+		base := bi * QK8
+		for i := 0; i < 16; i++ {
+			hi0 := (qh[i>>3] >> uint(i&7)) & 1
+			hi1 := (qh[(i+16)>>3] >> uint((i+16)&7)) & 1
+			q0 := (int(qs[i]&0xF) | (int(hi0) << 4)) - 16
+			q1 := (int(qs[i]>>4)  | (int(hi1) << 4)) - 16
+			acc += d * float64(q0) * float64(x[base+i])
+			acc += d * float64(q1) * float64(x[base+16+i])
+		}
+	}
+	return float32(acc)
+}
+
 // matVec computes y = W·x, returning y of length w.rows.
 func matVec(w *Weight, x []float32) []float32 {
 	y := make([]float32, w.rows)
@@ -451,6 +501,10 @@ func matVec(w *Weight, x []float32) []float32 {
 			y[r] = dotF32(row, x)
 		case typeF16:
 			y[r] = dotF16(row, x)
+		case typeQ4_0:
+			y[r] = dotQ4_0(row, x)
+		case typeQ5_0:
+			y[r] = dotQ5_0(row, x)
 		case typeQ4K:
 			y[r] = dotQ4K(row, x)
 		case typeQ6K:
@@ -495,6 +549,31 @@ func embedRow(w *Weight, idx int) []float32 {
 					out[base+sb*32+l] = float32(db*float64(q[l]&0xF) - mb)
 					out[base+sb*32+16+l] = float32(db*float64(q[l]>>4) - mb)
 				}
+			}
+		}
+	case typeQ4_0:
+		for bi := 0; bi*QK8 < len(out); bi++ {
+			b := row[bi*szQ4_0:]
+			d := float64(fp16ToF32(binary.LittleEndian.Uint16(b[0:])))
+			qs := b[2:]
+			base := bi * QK8
+			for i := 0; i < 16; i++ {
+				out[base+i]    = float32(d * (float64(qs[i]&0xF) - 8))
+				out[base+16+i] = float32(d * (float64(qs[i]>>4)  - 8))
+			}
+		}
+	case typeQ5_0:
+		for bi := 0; bi*QK8 < len(out); bi++ {
+			b := row[bi*szQ5_0:]
+			d  := float64(fp16ToF32(binary.LittleEndian.Uint16(b[0:])))
+			qh := b[2:6]
+			qs := b[6:]
+			base := bi * QK8
+			for i := 0; i < 16; i++ {
+				hi0 := (qh[i>>3] >> uint(i&7)) & 1
+				hi1 := (qh[(i+16)>>3] >> uint((i+16)&7)) & 1
+				out[base+i]    = float32(d * float64((int(qs[i]&0xF)|(int(hi0)<<4))-16))
+				out[base+16+i] = float32(d * float64((int(qs[i]>>4) |(int(hi1)<<4))-16))
 			}
 		}
 	case typeQ6K:
