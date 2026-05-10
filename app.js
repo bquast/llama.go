@@ -113,6 +113,7 @@ async function init() {
     input.disabled   = false;
     sendBtn.disabled = false;
     input.focus();
+    appendMsg("system", "Model is ready! Send a message to start chatting.");
   } catch (e) {
     appendMsg("system", "error: " + e.message);
     console.error(e);
@@ -129,7 +130,11 @@ async function send() {
   sendBtn.disabled = true;
 
   appendMsg("user", text);
-  const replyEl = appendMsg("assistant", "🤔 thinking…");
+  const replyEl = appendMsg("assistant", "");
+  replyEl.innerHTML = '<span class="spinner"></span>';
+
+  // Force the browser to repaint the DOM (clear input, show spinner) before blocking on WASM
+  await new Promise(r => setTimeout(r, 10));
 
   try {
     const finalReply = await llm.generate(text, MAX_TOKENS, TEMPERATURE, (partialText) => {

@@ -1287,6 +1287,8 @@ func jsGenerate(_ js.Value, args []js.Value) any {
 					break
 				}
 				logits = forwardOne(id)
+				// Yield to JS event loop during prefill to prevent UI freezing
+				time.Sleep(1 * time.Millisecond)
 			}
 
 			// Autoregressive decode
