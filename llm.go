@@ -1242,8 +1242,8 @@ func jsGenerate(_ js.Value, args []js.Value) any {
 		temp = float32(args[2].Float())
 	}
 
-	// Format as ChatML for SmolLM2-Instruct (no system message — cleaner for 135M)
-	full := "<|im_start|>user\n" + prompt + "<|im_end|>\n<|im_start|>assistant\n"
+	// Format as ChatML for SmolLM2-Instruct (includes the default system message it was trained on)
+	full := "<|im_start|>system\nYou are a helpful AI assistant named SmolLM, trained by Hugging Face<|im_end|>\n<|im_start|>user\n" + prompt + "<|im_end|>\n<|im_start|>assistant\n"
 
 	kvPos = 0
 	ids := tok.encode(full)
