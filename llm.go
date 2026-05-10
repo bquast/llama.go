@@ -1180,16 +1180,25 @@ func jsGenerate(_ js.Value, args []js.Value) any {
 		temp = float32(args[2].Float())
 	}
 
-	// Format as ChatML for SmolLM2-Instruct
-	full := "<|im_start|>system\nYou are a helpful AI assistant.<|im_end|>\n" +
-		"<|im_start|>user\n" + prompt + "<|im_end|>\n" +
-		"<|im_start|>assistant\n"
+	// Format as ChatML for SmolLM2-Instruct (no system message — cleaner for 135M)
+	full := "<|im_start|>user\n" + prompt + "<|im_end|>\n<|im_start|>assistant\n"
 
 	kvPos = 0
 	ids := tok.encode(full)
 	if len(ids) == 0 {
 		ids = []int{tok.bosID}
 	}
+
+	// Debug: log prompt tokens and key config to console
+	console := js.Global().Get("console")
+	dbg := fmt.Sprintf("bosID=%d eosID=%d nSpecial=%d promptLen=%d",
+		tok.bosID, tok.eosID, len(tok.specialTokens), len(ids))
+	if len(ids) > 0 {
+		first := fmt.Sprintf(" first3IDs=%v", ids[:min3(len(ids), 3)])
+		dbg += first
+	}
+	console.Call("log", "[llm.go]", dbg)
+	console.Call("log", "[llm.go] prompt tokenized:", tok.tokenizeDebug(full[:min3(len(full), 60)]))
 
 	// Prefill the prompt
 	var logits []float32
@@ -1204,6 +1213,7 @@ func jsGenerate(_ js.Value, args []js.Value) any {
 	var out []int
 	for i := 0; i < maxNew && kvPos < maxCtx; i++ {
 		next := sampleTopK(logits, temp, 40)
+		console.Call("log", fmt.Sprintf("[llm.go] token %d: id=%d str=%q", i, next, safeToken(tok, next)))
 		if next == tok.eosID {
 			break
 		}
@@ -1211,6 +1221,12 @@ func jsGenerate(_ js.Value, args []js.Value) any {
 		logits = forwardOne(next)
 	}
 	return tok.decode(out)
+}
+
+func min3(a, b int) int { if a < b { return a }; return b }
+func safeToken(t *BPETokenizer, id int) string {
+	if id < 0 || id >= len(t.dec) { return "?" }
+	return t.dec[id]
 }
 
 func jsReady(_ js.Value, _ []js.Value) any { return isReady }

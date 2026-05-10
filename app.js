@@ -7,8 +7,8 @@
 
 const MODEL_URL =
   "https://huggingface.co/bartowski/SmolLM2-135M-Instruct-GGUF/resolve/main/" +
-  "SmolLM2-135M-Instruct-Q4_K_M.gguf";
-const CACHE_NAME  = "llm-go-v1";
+  "SmolLM2-135M-Instruct-Q8_0.gguf";
+const CACHE_NAME  = "llm-go-v2-q8";
 const MAX_TOKENS  = 200;
 const TEMPERATURE = 0.7;
 
